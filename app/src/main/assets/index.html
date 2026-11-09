@@ -46,6 +46,20 @@ html,body{margin:0;height:100%;font:400 15px/1.4 -apple-system,Segoe UI,Roboto,s
   <button class="pill primary" id="download">⬇ Download view for offline</button>
 </div>
 <div class="loading" id="loading"><div class="spinner"></div><div style="font-size:13px;color:var(--text2)">Loading map…</div></div>
+<div class="modal" id="dlmodal" style="position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--card);border-radius:var(--radius);padding:20px;max-width:340px;width:100%">
+    <h3 style="margin:0 0 8px">Download Karnataka map?</h3>
+    <p style="font-size:13px;color:var(--text2);margin:0 0 16px">Download the whole Karnataka map for offline use. Works on mobile data or WiFi. Size ~30-60 MB. You can cancel anytime.</p>
+    <div id="dlprogress" style="display:none;margin-bottom:12px">
+      <div style="height:6px;background:var(--line);border-radius:3px;overflow:hidden"><div id="dlbar" style="height:100%;width:0%;background:var(--accent);transition:width .2s"></div></div>
+      <div id="dltext" style="font-size:12px;color:var(--text2);margin-top:6px">0 / 0</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="pill" id="dlskip" style="flex:1">Skip</button>
+      <button class="pill primary" id="dlstart" style="flex:1">Download</button>
+    </div>
+  </div>
+</div>
 <script src="maplibre-gl.js"></script>
 <script>
 const map=new maplibregl.Map({
@@ -133,17 +147,36 @@ document.getElementById('q').addEventListener('keydown',async e=>{
   }catch(err){showStatus('Offline — search unavailable')}
 });
 
-// download current view tiles
-document.getElementById('download').onclick=()=>{
-  showStatus('Caching current view…');
-  const b=map.getBounds();const z=Math.round(map.getZoom());
-  let n=0;
-  const minX=Math.floor((b.getWest()+180)/360*Math.pow(2,z));
-  const maxX=Math.floor((b.getEast()+180)/360*Math.pow(2,z));
-  const minY=Math.floor((1-Math.log(Math.tan(b.getNorth()*Math.PI/180)+1/Math.cos(b.getNorth()*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
-  const maxY=Math.floor((1-Math.log(Math.tan(b.getSouth()*Math.PI/180)+1/Math.cos(b.getSouth()*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
-  for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++){cacheTile(z,x,y);n++}
-  showStatus('Cached '+n+' tiles at zoom '+z);
+// First-launch: ask to download whole Karnataka
+const DL_KEY='ka_downloaded';
+function showDlModal(){document.getElementById('dlmodal').style.display='flex'}
+function hideDlModal(){document.getElementById('dlmodal').style.display='none'}
+if(!localStorage.getItem(DL_KEY)){setTimeout(showDlModal,800)}
+document.getElementById('dlskip').onclick=()=>{localStorage.setItem(DL_KEY,'skipped');hideDlModal()};
+document.getElementById('dlstart').onclick=async ()=>{
+  document.getElementById('dlstart').disabled=true;
+  document.getElementById('dlprogress').style.display='block';
+  const bar=document.getElementById('dlbar');const txt=document.getElementById('dltext');
+  // Karnataka bbox
+  const minLng=74.0,maxLng=78.6,minLat=11.5,maxLat=18.5;
+  const tiles=[];
+  for(let z=7;z<=12;z++){
+    const minX=Math.floor((minLng+180)/360*Math.pow(2,z));
+    const maxX=Math.floor((maxLng+180)/360*Math.pow(2,z));
+    const minY=Math.floor((1-Math.log(Math.tan(maxLat*Math.PI/180)+1/Math.cos(maxLat*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
+    const maxY=Math.floor((1-Math.log(Math.tan(minLat*Math.PI/180)+1/Math.cos(minLat*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
+    for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++)tiles.push([z,x,y]);
+  }
+  let done=0;const total=tiles.length;
+  for(const [z,x,y] of tiles){
+    await cacheTile(z,x,y);
+    done++;
+    bar.style.width=(done/total*100)+'%';
+    txt.textContent=done+' / '+total;
+  }
+  localStorage.setItem(DL_KEY,'done');
+  hideDlModal();
+  showStatus('Karnataka map downloaded ('+total+' tiles)');
 };
 </script>
 </body>
