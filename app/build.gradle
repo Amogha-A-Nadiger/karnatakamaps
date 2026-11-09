@@ -13,24 +13,3 @@ android {
 }
 dependencies {
 }
-'@ | Set-Content -Path "F:\ZyvoWork\karnatakamaps\app\build.gradle"
-# fix properly via edit tool instead - rewrite file
-$root="F:\ZyvoWork\karnatakamaps"
-@'
-plugins { id 'com.android.application' }
-android {
-    namespace 'com.zyvo.karnatakamaps'
-    compileSdk 34
-    defaultConfig {
-        applicationId 'com.zyvo.karnatakamaps'
-        minSdk 26
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
-    }
-    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-}
-dependencies {
-}
-'@ | Set-Content -Path "$root\app\build.gradle"
-Write-Host done
