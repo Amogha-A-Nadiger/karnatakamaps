@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Karnataka Maps</title>
+<link rel="stylesheet" href="maplibre-gl.css"/>
+<style>
+:root{--bg:#F6F7F9;--card:#FFFFFF;--text1:#1A1A1A;--text2:#8A8A8E;--line:#EFEFF0;--accent:#2563EB;--ok:#1B7A43;--warn:#E0453A;--radius:16px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;font:400 15px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text1);overflow:hidden}
+#map{position:absolute;inset:0}
+.topbar{position:absolute;top:0;left:0;right:0;z-index:5;padding:12px 12px 0;display:flex;gap:8px;align-items:center}
+.search{flex:1;background:var(--card);border-radius:28px;padding:10px 14px;box-shadow:0 2px 8px rgba(0,0,0,.12);display:flex;align-items:center;gap:8px}
+.search input{border:0;outline:0;background:transparent;flex:1;font-size:15px;color:var(--text1)}
+.iconbtn{width:44px;height:44px;border-radius:50%;background:var(--card);border:0;box-shadow:0 2px 8px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center;font-size:18px;cursor:pointer}
+.bottombar{position:absolute;bottom:0;left:0;right:0;z-index:5;padding:12px;display:flex;gap:8px;justify-content:center}
+.pill{background:var(--card);border-radius:28px;padding:10px 16px;box-shadow:0 2px 8px rgba(0,0,0,.12);font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer;border:0}
+.pill.primary{background:var(--accent);color:#fff}
+.status{position:absolute;top:60px;left:50%;transform:translateX(-50%);z-index:6;background:#FFF4E5;color:#8A5A00;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;display:none}
+.status.show{display:block}
+.pinlist{position:absolute;bottom:70px;left:12px;right:12px;z-index:6;background:var(--card);border-radius:var(--radius);padding:12px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:40%;overflow:auto;display:none}
+.pinlist.show{display:block}
+.pinlist h4{margin:0 0 8px;font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.08em}
+.pinrow{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.pinrow:last-child{border:0}
+.pinrow .grow{flex:1;min-width:0}
+.pinrow button{background:none;border:0;color:var(--warn);font-size:16px;cursor:pointer}
+.loading{position:absolute;inset:0;z-index:7;background:rgba(255,255,255,.8);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+.loading.hide{display:none}
+.spinner{width:32px;height:32px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="topbar">
+  <div class="search"><span>🔍</span><input id="q" placeholder="Search places in Karnataka" autocomplete="off"/></div>
+  <button class="iconbtn" id="locate" title="My location">📍</button>
+  <button class="iconbtn" id="pinsBtn" title="Saved places">📌</button>
+</div>
+<div class="status" id="status"></div>
+<div class="pinlist" id="pinlist"><h4>Saved places</h4><div id="pinrows"></div></div>
+<div class="bottombar">
+  <button class="pill" id="savepin">📌 Save this spot</button>
+  <button class="pill primary" id="download">⬇ Download view for offline</button>
+</div>
+<div class="loading" id="loading"><div class="spinner"></div><div style="font-size:13px;color:var(--text2)">Loading map…</div></div>
+<script src="maplibre-gl.js"></script>
+<script>
+const map=new maplibregl.Map({
+  container:'map',
+  style:{version:8,sources:{osm:{type:'raster',tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],tileSize:256,attribution:'© OpenStreetMap'}},layers:[{id:'osm',type:'raster',source:'osm'}]},
+  center:[76.5,14.5],zoom:7
+});
+map.on('load',()=>document.getElementById('loading').classList.add('hide'));
+
+// offline tile cache in IndexedDB
+const DB='kmaps';let db;
+const req=indexedDB.open(DB,1);
+req.onupgradeneeded=e=>{db=e.target.result;if(!db.objectStoreNames.contains('tiles'))db.createObjectStore('tiles')};
+req.onsuccess=e=>{db=e.target.result};
+function tileKey(z,x,y){return z+'/'+x+'/'+y}
+async function cacheTile(z,x,y){
+  try{
+    const r=await fetch('https://tile.openstreetmap.org/'+z+'/'+x+'/'+y+'.png');
+    if(!r.ok) return;
+    const b=await r.blob();
+    const t=await db.transaction('tiles','readwrite');const s=t.objectStore('tiles');
+    s.put(b,tileKey(z,x,y));
+  }catch(e){}
+}
+async function getCachedTile(z,x,y){
+  return new Promise(res=>{
+    if(!db){res(null);return}
+    const t=db.transaction('tiles','readonly');const s=t.objectStore('tiles');
+    const r=s.get(tileKey(z,x,y));r.onsuccess=()=>res(r.result||null);r.onerror=()=>res(null);
+  });
+}
+
+// custom cached source
+map.on('render',()=>{
+  const b=map.getBounds();const z=Math.round(map.getZoom());
+  if(z>16) return;
+  const minX=Math.floor((b.getWest()+180)/360*Math.pow(2,z));
+  const maxX=Math.floor((b.getEast()+180)/360*Math.pow(2,z));
+  const minY=Math.floor((1-Math.log(Math.tan(b.getNorth()*Math.PI/180)+1/Math.cos(b.getNorth()*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
+  const maxY=Math.floor((1-Math.log(Math.tan(b.getSouth()*Math.PI/180)+1/Math.cos(b.getSouth()*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
+  for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++)cacheTile(z,x,y);
+});
+
+// pins
+function getPins(){try{return JSON.parse(localStorage.getItem('pins')||'[]')}catch(e){return[]}}
+function setPins(p){localStorage.setItem('pins',JSON.stringify(p))}
+function renderPins(){
+  const rows=document.getElementById('pinrows');rows.innerHTML='';
+  getPins().forEach((p,i)=>{
+    const d=document.createElement('div');d.className='pinrow';
+    d.innerHTML='<span>📌</span><div class="grow"><div>'+p.name+'</div><div style="font-size:12px;color:var(--text2)">'+p.lat.toFixed(4)+', '+p.lng.toFixed(4)+'</div></div><button data-i="'+i+'">✕</button>';
+    d.querySelector('button').onclick=()=>{const ps=getPins();ps.splice(i,1);setPins(ps);renderPins()};
+    d.onclick=e=>{if(e.target.tagName!=='BUTTON'){map.flyTo({center:[p.lng,p.lat],zoom:14});document.getElementById('pinlist').classList.remove('show')}};
+    rows.appendChild(d);
+  });
+}
+document.getElementById('savepin').onclick=()=>{
+  const c=map.getCenter();
+  const name=prompt('Name this place:');if(!name) return;
+  const ps=getPins();ps.push({name,lat:c.lat,lng:c.lng});setPins(ps);renderPins();
+  new maplibregl.Marker({color:'#2563EB'}).setLngLat([c.lng,c.lat]).addTo(map);
+};
+document.getElementById('pinsBtn').onclick=()=>{renderPins();document.getElementById('pinlist').classList.toggle('show')};
+
+// locate
+document.getElementById('locate').onclick=()=>{
+  if(!navigator.geolocation){showStatus('Geolocation not available');return}
+  navigator.geolocation.getCurrentPosition(pos=>{
+    map.flyTo({center:[pos.coords.longitude,pos.coords.latitude],zoom:14});
+    new maplibregl.Marker({color:'#1B7A43'}).setLngLat([pos.coords.longitude,pos.coords.latitude]).addTo(map);
+  },()=>showStatus('Location permission denied'));
+};
+function showStatus(t){const s=document.getElementById('status');s.textContent=t;s.classList.add('show');setTimeout(()=>s.classList.remove('show'),3000)}
+
+// search via nominatim (online, cached)
+document.getElementById('q').addEventListener('keydown',async e=>{
+  if(e.key!=='Enter') return;
+  const q=e.target.value.trim();if(!q) return;
+  showStatus('Searching…');
+  try{
+    const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(q+', Karnataka, India')+'&limit=5');
+    const d=await r.json();
+    if(d.length){map.flyTo({center:[+d[0].lon,+d[0].lat],zoom:14});showStatus('Found: '+d[0].display_name.split(',')[0])}
+    else showStatus('No results');
+  }catch(err){showStatus('Offline — search unavailable')}
+});
+
+// download current view tiles
+document.getElementById('download').onclick=()=>{
+  showStatus('Caching current view…');
+  const b=map.getBounds();const z=Math.round(map.getZoom());
+  let n=0;
+  const minX=Math.floor((b.getWest()+180)/360*Math.pow(2,z));
+  const maxX=Math.floor((b.getEast()+180)/360*Math.pow(2,z));
+  const minY=Math.floor((1-Math.log(Math.tan(b.getNorth()*Math.PI/180)+1/Math.cos(b.getNorth()*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
+  const maxY=Math.floor((1-Math.log(Math.tan(b.getSouth()*Math.PI/180)+1/Math.cos(b.getSouth()*Math.PI/180))/Math.PI)/2*Math.pow(2,z));
+  for(let x=minX;x<=maxX;x++)for(let y=minY;y<=maxY;y++){cacheTile(z,x,y);n++}
+  showStatus('Cached '+n+' tiles at zoom '+z);
+};
+</script>
+</body>
+</html>
